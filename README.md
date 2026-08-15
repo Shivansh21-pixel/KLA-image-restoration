@@ -2,390 +2,250 @@
 
 <p align="center">
   <h1 align="center">KLA · AI Semiconductor Image Restoration</h1>
-  <p align="center"><b>From noisy low-resolution sensor data to clean, high-resolution semiconductor imagery using a lightweight NAFNet-inspired restoration pipeline.</b></p>
+  <p align="center"><b>Restoring 128×128 noisy low-resolution semiconductor imagery into 256×256 high-resolution outputs.</b></p>
   <p align="center">
-    <a href="https://github.com/Shivansh21-pixel/KLA-image-restoration"><img src="https://img.shields.io/badge/Project-Hackathon%20Submission-111827?style=for-the-badge" alt="Project"></a>
-    <img src="https://img.shields.io/badge/Task-Image%20Restoration-2563eb?style=for-the-badge" alt="Task">
-    <img src="https://img.shields.io/badge/Model-NAFNet%20Lite-7c3aed?style=for-the-badge" alt="Model">
-    <img src="https://img.shields.io/badge/Framework-PyTorch-ee4c2c?style=for-the-badge&logo=pytorch" alt="PyTorch">
+    <b>WAYAN-X</b>
   </p>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Task-Image%20Restoration-2563eb?style=for-the-badge" alt="Task">
+  <img src="https://img.shields.io/badge/Model-NAFNet%20Lite-7c3aed?style=for-the-badge" alt="Model">
+  <img src="https://img.shields.io/badge/Framework-PyTorch-ee4c2c?style=for-the-badge&logo=pytorch" alt="PyTorch">
+  <img src="https://img.shields.io/badge/Test%20Images-400-059669?style=for-the-badge" alt="Test Images">
 </p>
 
 ---
 
-## 🏆 Executive Summary
+## 🎯 The Challenge
 
-**KLA** is an end-to-end deep-learning image restoration system designed for a semiconductor-imaging workflow where degraded **128×128 grayscale NoisyLR arrays** must be transformed into clean **256×256 reconstructions**.
+Semiconductor imaging can produce noisy and low-resolution observations where important structures are difficult to recover. Simple interpolation can increase resolution, but it does not learn how degraded observations map to clean images.
 
-Instead of treating the task as simple image resizing, the system learns a restoration mapping from paired degraded/clean examples. The final pipeline combines a **lightweight multi-scale NAFNet-inspired architecture**, residual learning, validation-driven checkpoint selection, test-time augmentation (TTA), and prediction ensembling.
+**Our goal:** learn that mapping from paired examples and reconstruct a sharper **256×256** image from a **128×128** noisy input while preserving structural information.
 
-### Current verified validation result
+```text
+128×128 NoisyLR
+       │
+       ▼
+┌──────────────────────┐
+│     NAFNet Lite      │
+│  Multi-scale encoder │
+│  SimpleGate blocks   │
+│  Skip connections    │
+│  Residual learning   │
+│  Decoder + upsample  │
+└──────────────────────┘
+       │
+       ▼
+256×256 Restored Image
+       │
+       ├── TTA inference
+       │
+       └── Prediction ensemble
+```
 
-| Metric | Result |
+---
+
+## 🏆 Results
+
+The strongest recorded validation checkpoint from the 50-epoch training run achieved:
+
+| Metric | Best Validation Result |
 |---|---:|
-| 🥇 **Best PSNR** | **28.7921 dB** |
-| 🥇 **Best SSIM** | **0.7709** |
-| **Validation L1** | **0.028807** |
+| **PSNR** | **28.7921 dB** |
+| **SSIM** | **0.7709** |
+| Validation L1 | **0.028807** |
 | Test inputs processed | **400** |
-| Final output resolution | **256×256** |
+| Output resolution | **256×256** |
 
-> **Important:** 28.7921 dB PSNR and 0.7709 SSIM are validation results from the recorded training run. Test-set PSNR/SSIM is not claimed because test ground truth was not available locally.
-
----
-
-## 🎯 The Problem
-
-Semiconductor imaging pipelines can contain degraded, noisy, or low-resolution observations. A naive interpolation method can make an image larger, but it does **not** recover information in a learned, data-driven way.
-
-Our objective is:
-
-```text
-             DEGRADED INPUT
-             128 × 128 × 1
-                   │
-                   ▼
-        ┌─────────────────────┐
-        │   NAFNet Lite       │
-        │                     │
-        │ Multi-scale encoder │
-        │      +              │
-        │ Gated restoration   │
-        │      +              │
-        │ Skip connections    │
-        │      +              │
-        │ Decoder / upsample  │
-        └─────────────────────┘
-                   │
-                   ▼
-             RESTORED OUTPUT
-             256 × 256 × 1
-```
-
-### Why this is harder than resizing
-
-A resize algorithm only estimates missing pixels from neighboring pixels. Our network instead learns from **NoisyLR → GT** pairs and optimizes reconstruction quality using image-restoration losses and perceptual structural metrics.
-
----
-
-# 🧠 Solution Architecture
-
-## NAFNet Lite
-
-The main model is a compact **NAFNet-inspired encoder-decoder** implemented specifically for this project.
-
-The architecture uses:
-
-- Multi-scale feature extraction
-- Encoder/decoder hierarchy
-- NAF-style SimpleGate blocks
-- Depthwise convolutions
-- Group normalization
-- Residual learning
-- Skip connections between encoder and decoder stages
-- PixelShuffle-based 2× upsampling
-- Lightweight channel width configuration
-
-### Model configuration
-
-```yaml
-name: "nafnet_lite"
-
-in_channels: 1
-out_channels: 1
-width: 32
-
-enc_blocks: [2, 2, 4]
-middle_blocks: 4
-dec_blocks: [2, 2, 2]
-
-scale: 2
-```
-
-### High-level flow
-
-```text
-Input 128×128
-      │
-      ▼
-  Intro Conv
-      │
-      ▼
-┌───────────────┐
-│ Encoder Level │ ────────┐
-└───────────────┘         │ Skip
-      │                    │
-    Down                  │
-      │                    │
-┌───────────────┐         │
-│ Encoder Level │ ────────┤
-└───────────────┘         │ Skip
-      │                    │
-    Down                  │
-      │                    │
-┌───────────────┐         │
-│ Deep Encoder  │ ────────┤
-└───────────────┘         │ Skip
-      │                    │
-      ▼                    │
-┌───────────────┐         │
-│    Middle     │         │
-│  NAF Blocks   │         │
-└───────────────┘         │
-      │                    │
-      ▼                    │
-   Upsample ───────────────┘
-      │
-      ▼
-   Decoder
-      │
-      ▼
-  Upsample ×2
-      │
-      ▼
-256×256 Output
-```
-
-> **Implementation note:** This repository uses a lightweight NAFNet-inspired design; it is **not** the original full NAFNet implementation.
-
----
-
-# 🔬 Training Strategy
-
-The project was built as an iterative experimental pipeline rather than jumping directly to a large model.
-
-### Phase 1 — Dataset inspection
-
-Before training, the dataset was inspected for:
-
-- Number of `.npy` files
-- Input/target shapes
-- Value ranges
-- Pairing consistency
-- Unexpected files
-
-This prevented silent dataset-pairing errors from contaminating the experiment.
-
-### Phase 2 — Baseline
-
-A small CNN baseline was trained first to establish a reference point.
-
-Recorded baseline performance was approximately:
+### Baseline → NAFNet Lite
 
 | Model | PSNR | SSIM |
 |---|---:|---:|
 | Tiny CNN Baseline | ~27.89 dB | ~0.74 |
 | **NAFNet Lite** | **28.7921 dB** | **0.7709** |
 
-The baseline gave us a measurable starting point before introducing the more capable architecture.
-
-### Phase 3 — NAFNet Lite
-
-The baseline was replaced with a multi-scale NAFNet-inspired architecture capable of processing features at different spatial scales.
-
-### Phase 4 — Validation-driven checkpointing
-
-During training, the pipeline tracks:
-
-- Train L1
-- Validation L1
-- Validation PSNR
-- Validation SSIM
-- Best PSNR checkpoint
-- Latest checkpoint
-
-The best model is stored at:
-
-```text
-checkpoints_nafnet/best_model.pth
-```
-
-### Phase 5 — Test-time inference
-
-The best validation checkpoint was used to process the complete test set:
-
-```text
-400 / 400 images processed
-```
-
-### Phase 6 — TTA
-
-A second prediction stream was generated using test-time augmentation. The purpose is to reduce prediction variance and make the final reconstruction less dependent on a single input orientation/transformation.
-
-### Phase 7 — Ensemble
-
-Normal and TTA predictions were combined:
-
-```text
-Final = 0.5 × Normal Prediction
-      + 0.5 × TTA Prediction
-```
-
-This produced a final ensemble directory containing **400 restored arrays**.
+> These PSNR/SSIM values are **validation results** from the recorded experiment. No test-set PSNR/SSIM is claimed because test ground truth was not available locally.
 
 ---
 
-# 📊 Results
+## 🧠 Our Approach
 
-## Validation performance
+### 1. Establish a baseline
+
+We first trained a compact CNN to obtain a reference point before moving to a more capable restoration architecture.
+
+### 2. Multi-scale restoration with NAFNet Lite
+
+The main model is a lightweight **NAFNet-inspired encoder-decoder** built for this task. It uses:
+
+- SimpleGate-based blocks
+- Depthwise convolutions
+- Group normalization
+- Multi-scale encoder/decoder processing
+- Encoder-decoder skip connections
+- Residual learning
+- PixelShuffle-based upsampling
 
 ```text
-Best Validation PSNR : 28.7921 dB
-Best Validation SSIM : 0.7709
-Validation L1        : 0.028807
+Input
+  │
+  ▼
+Intro Conv
+  │
+  ├─────────────── Skip ───────────────┐
+  ▼                                    │
+Encoder 1 → Down                      │
+  │                                    │
+  ├─────────────── Skip ───────────┐  │
+  ▼                                │  │
+Encoder 2 → Down                  │  │
+  │                                │  │
+  ▼                                │  │
+Encoder 3 → Down                  │  │
+  │                                │  │
+  ▼                                │  │
+Middle NAF Blocks                  │  │
+  │                                │  │
+  ▼                                │  │
+Upsample → Decoder ←───────────────┘  │
+  │                                   │
+  ▼                                   │
+Upsample → Decoder ←──────────────────┘
+  │
+  ▼
+256×256 Output
 ```
 
-The best validation checkpoint was reached at the end of the recorded 50-epoch run.
+The implementation is intentionally lightweight rather than being the original full NAFNet implementation.
 
-### Why PSNR + SSIM?
+### 3. Validation-driven training
 
-**PSNR** measures pixel-level reconstruction fidelity. Higher is better.
+The training pipeline tracks **L1, PSNR and SSIM** on a held-out validation split and saves both the latest checkpoint and the best-performing checkpoint.
 
-**SSIM** measures structural similarity and is useful when evaluating whether edges, patterns, and local image structure are preserved.
+```text
+checkpoints_nafnet/
+├── best_model.pth
+└── latest_model.pth
+```
 
-Using both gives a more informative view than relying on only one number.
+### 4. Robust inference
+
+The best checkpoint was used to restore all **400 test images**. We then explored test-time augmentation and combined normal/TTA predictions through a simple ensemble.
+
+```text
+                 Test Set
+                    │
+          ┌─────────┴─────────┐
+          ▼                   ▼
+   Normal Inference      TTA Inference
+          │                   │
+          └─────────┬─────────┘
+                    ▼
+                 0.5 / 0.5
+                 Ensemble
+                    │
+                    ▼
+             400 Final .npy
+```
 
 ---
 
-# 🧪 Final Prediction Pipeline
+## 🔬 Why This Pipeline?
 
-```text
-                 400 Test Images
-                        │
-             ┌──────────┴──────────┐
-             │                     │
-             ▼                     ▼
-       Normal Inference          TTA Inference
-             │                     │
-             │                     │
-             └──────────┬──────────┘
-                        ▼
-                    Ensemble
-                        │
-                        ▼
-              400 Final Predictions
-                        │
-                        ▼
-                 256 × 256 .npy
-```
+**Baseline first.** We wanted a measurable reference before increasing model complexity.
 
-### Example ensemble output statistics
+**Multi-scale features.** Restoration needs both local detail and broader contextual information.
 
-For `000000.npy`:
+**Residual learning.** The network learns a restoration correction while retaining the useful information already present in the input.
 
-```text
-Shape : (256, 256)
-Min   : 0.015758
-Max   : 0.949072
-Mean  : 0.661427
-```
+**PSNR + SSIM.** PSNR captures pixel-level fidelity while SSIM provides a structural-quality view.
 
-These statistics are included as a sanity check for the generated output and are **not** a substitute for ground-truth scoring.
+**TTA + ensemble.** Multiple inference paths can be combined to make predictions less dependent on a single transformation.
 
 ---
 
-# 📁 Repository Structure
+## 📁 Project Structure
 
 ```text
 KLA-image-restoration/
 │
 ├── configs/
-│   ├── dataset.yaml          # Dataset configuration
-│   ├── model.yaml            # NAFNet Lite configuration
-│   └── train.yaml            # Training configuration
+│   ├── dataset.yaml
+│   ├── model.yaml
+│   └── train.yaml
 │
 ├── datasets/
-│   └── npy_dataset.py        # Paired NumPy dataset loader
+│   └── npy_dataset.py
 │
 ├── models/
-│   ├── nafnet_lite.py        # Main restoration network
-│   └── tiny_baseline.py      # Baseline model
+│   ├── nafnet_lite.py
+│   └── tiny_baseline.py
 │
 ├── losses/
-│   └── ...                   # Loss utilities
-│
 ├── utils/
-│   ├── checkpoint.py         # Checkpoint helpers
-│   ├── metrics.py            # PSNR / SSIM utilities
-│   └── seed.py               # Reproducibility helpers
+│   ├── checkpoint.py
+│   ├── metrics.py
+│   └── seed.py
 │
 ├── scripts/
-│   ├── inspect_dataset.py    # Dataset inspection
+│   ├── inspect_dataset.py
 │   ├── benchmark_inference.py
 │   └── metrics.py
 │
-├── docs/
-│   └── ppt_content.md        # Presentation material
-│
 ├── reports/
-│   └── dataset_report.json   # Dataset inspection report
+│   └── dataset_report.json
 │
-├── train.py                  # Training pipeline
-├── evaluate.py               # Evaluation/inference utility
-├── inference.py              # Inference entry point
+├── docs/
+│   └── ppt_content.md
+│
+├── train.py
+├── inference.py
+├── evaluate.py
 ├── requirements.txt
-├── .gitignore
 └── README.md
 ```
 
 ---
 
-# ⚙️ Quick Start
+## ⚡ Run the Project
 
-## 1. Clone the repository
+### Clone
 
 ```bash
 git clone https://github.com/Shivansh21-pixel/KLA-image-restoration.git
 cd KLA-image-restoration
 ```
 
-## 2. Create environment
-
-### Windows PowerShell
+### Environment
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-```
-
-## 3. Install dependencies
-
-```bash
 pip install -r requirements.txt
 ```
 
-## 4. Configure dataset paths
+### Configure
 
-Edit:
+Set the local dataset paths in:
 
 ```text
 configs/dataset.yaml
 ```
 
-with the location of your local dataset.
-
-## 5. Inspect the dataset
-
-```bash
-python scripts/inspect_dataset.py --config configs/dataset.yaml
-```
-
-This should be done before expensive training.
-
-## 6. Train
+### Train
 
 ```bash
 python train.py
 ```
 
-## 7. Resume interrupted training
-
-The training pipeline saves a latest checkpoint, allowing training to continue after interruption:
+### Resume training
 
 ```bash
 python train.py --resume
 ```
 
-## 8. Run inference
+### Inference
 
 ```powershell
 python inference.py --input_dir "PATH_TO_TEST_NOISYLR" --output_dir "results/final_nafnet" --checkpoint "checkpoints_nafnet/best_model.pth"
@@ -393,11 +253,9 @@ python inference.py --input_dir "PATH_TO_TEST_NOISYLR" --output_dir "results/fin
 
 ---
 
-# 🧩 Data Format
+## 📦 Data Format
 
-The pipeline works with NumPy `.npy` arrays.
-
-Expected structure:
+The experiment uses paired NumPy arrays:
 
 ```text
 train/
@@ -410,146 +268,45 @@ train/
     ├── 000000.npy
     ├── 000001.npy
     └── ...
-
-Test_NoisyLR/
-└── NoisyLR/
-    ├── 000000.npy
-    ├── 000001.npy
-    └── ...
 ```
 
-Typical dimensions used in the experiment:
+Typical experiment dimensions:
 
 ```text
-NoisyLR : 128 × 128
-GT      : 256 × 256
+NoisyLR : 128×128
+GT      : 256×256
 ```
 
-The dataset itself is intentionally **not committed to GitHub**.
+The dataset itself is not included in this repository.
 
 ---
 
-# 🛡️ Engineering & Reproducibility
+## 🚀 What We Would Improve Next
 
-The repository separates configuration, data loading, model architecture, training, evaluation, and utility code so experiments can be reproduced without rewriting the pipeline.
+With additional compute/time, the next experiments would focus on:
 
-The training configuration controls:
-
-- Random seed
-- Batch size
-- Epoch count
-- Patch size
-- Learning rate
-- Validation split
-- Number of workers
-- Mixed precision setting
-- Checkpoint frequency
-
-The pipeline also maintains separate **best** and **latest** checkpoints, making experiments safer to resume.
-
----
-
-# 💡 Key Design Decisions
-
-### 1. Start with a baseline
-
-A baseline provides a measurable reference and prevents architectural changes from being evaluated without context.
-
-### 2. Use residual learning
-
-The network predicts a correction relative to the input rather than treating restoration as an entirely unrelated image-generation problem.
-
-### 3. Use multi-scale features
-
-Image degradation can affect both fine details and broader structures. Multi-scale processing gives the model access to different receptive-field sizes.
-
-### 4. Validate continuously
-
-Training loss alone is not enough. PSNR and SSIM are tracked on held-out data to identify the strongest checkpoint.
-
-### 5. Use TTA and ensembling at inference
-
-When multiple reasonable predictions are available, averaging them can provide a more stable final output than relying on a single inference path.
-
----
-
-# 🚧 Limitations & Next Improvements
-
-This is an actively developed hackathon system. The most important next improvements would be:
-
-- Stronger loss design combining pixel and structural objectives
-- More extensive augmentation
-- Larger/deeper NAFNet configuration if compute permits
+- Stronger pixel + structural loss combinations
+- More diverse augmentation
+- Larger NAFNet configurations
 - More TTA variants
-- Objective test-set scoring when GT becomes available
+- Objective scoring once test ground truth is available
+- More systematic experiment tracking
 - Visual benchmark panels for representative samples
-- Inference-time benchmarking and memory profiling
-- Experiment tracking across model configurations
-
-Being explicit about these limitations is intentional: the reported metrics are measured results, not fabricated claims.
+- Inference speed and memory optimization
 
 ---
 
-# 🏁 Hackathon Story
+## 👥 Team
 
-This project follows a complete **AI engineering loop**:
+### WAYAN-X
 
-```text
-        Inspect Data
-             ↓
-       Build Baseline
-             ↓
-       Train & Validate
-             ↓
-       Analyze Metrics
-             ↓
-     Upgrade Architecture
-             ↓
-       Select Best Model
-             ↓
-        Run Inference
-             ↓
-          Apply TTA
-             ↓
-         Ensemble
-             ↓
-       Final Predictions
-```
+**KLA Hackathon — AI Semiconductor Image Restoration**
 
-The focus is therefore not only on having a neural network, but on building a **reproducible, measurable and competition-ready restoration pipeline**.
+Built with **Python, PyTorch and deep-learning based image restoration**.
 
 ---
 
-# 📌 Current Status
-
-| Component | Status |
-|---|:---:|
-| Dataset inspection | ✅ |
-| Paired `.npy` loader | ✅ |
-| CNN baseline | ✅ |
-| NAFNet Lite | ✅ |
-| Training pipeline | ✅ |
-| Resume training | ✅ |
-| PSNR / SSIM validation | ✅ |
-| Best checkpoint selection | ✅ |
-| 400-image inference | ✅ |
-| Test-time augmentation | ✅ |
-| Ensemble predictions | ✅ |
-| Final visual benchmark panel | 🔄 |
-| Test-GT objective scoring | ⏳ |
-
----
-
-# 👤 Team
-
-**KLA Hackathon Project**
-
-Built with **Python + PyTorch** for AI-based semiconductor image restoration.
-
----
-
-## ⭐ If you find the project interesting
-
-Give the repository a ⭐ and explore the implementation.
-
-**Repository:** https://github.com/Shivansh21-pixel/KLA-image-restoration
+<p align="center">
+  <b>WAYAN-X</b><br>
+  <sub>Restoring clarity from degraded semiconductor imagery.</sub>
+</p>
