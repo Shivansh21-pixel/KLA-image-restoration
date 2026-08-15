@@ -12,7 +12,7 @@ A lightweight deep-learning restoration pipeline designed for degraded semicondu
 
 ---
 
-## 🚀 Overview
+## 🤺 Overview
 
 Semiconductor inspection systems operate under strict constraints on resolution, acquisition time, noise, and throughput. Low-resolution inspection scans can contain noise while simultaneously losing the fine structural information required to distinguish narrow circuit features and potential defects.
 
