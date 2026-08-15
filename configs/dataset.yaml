@@ -1,0 +1,9 @@
+train_root: "C:/Users/admin/Downloads/train"
+test_root: "C:/Users/admin/Downloads/Test_NoisyLR"
+
+noisy_dir_name: "NoisyLR"
+gt_dir_name: "GT"
+
+pairing: "same_stem"
+
+extensions: [".npy"]

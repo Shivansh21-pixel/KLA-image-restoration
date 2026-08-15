@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+checkpoints/
+checkpoints_nafnet/
+results/
+*.pth
+*.npy
+.env
+.vscode/

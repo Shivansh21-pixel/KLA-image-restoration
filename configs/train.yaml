@@ -1,0 +1,22 @@
+dataset_config: "configs/dataset.yaml"
+model_config: "configs/model.yaml"
+
+output_dir: "checkpoints_nafnet"
+
+seed: 42
+
+epochs: 50
+batch_size: 2
+num_workers: 0
+
+patch_size: 128
+
+learning_rate: 0.0002
+
+val_fraction: 0.1
+
+amp: true
+
+save_every: 1
+
+overfit_samples: 0

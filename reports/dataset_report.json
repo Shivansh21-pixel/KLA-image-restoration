@@ -1,0 +1,48 @@
+{
+  "train_noisy": {
+    "files": 3200,
+    "inspected": 3200,
+    "shapes": {
+      "(128, 128)": 3200
+    },
+    "dtypes": {
+      "float32": 3200
+    },
+    "min": -0.2785630524158478,
+    "max": 2.1580049991607666,
+    "mean_of_means": 0.4335362883156631,
+    "mean_of_stds": 0.2057952597970143,
+    "bad_files": []
+  },
+  "train_gt": {
+    "files": 3200,
+    "inspected": 3200,
+    "shapes": {
+      "(256, 256)": 3200
+    },
+    "dtypes": {
+      "float32": 3200
+    },
+    "min": 0.0,
+    "max": 1.0,
+    "mean_of_means": 0.43352844130800805,
+    "mean_of_stds": 0.18762914271617773,
+    "bad_files": []
+  },
+  "test_noisy": {
+    "files": 400,
+    "inspected": 400,
+    "shapes": {
+      "(128, 128)": 400
+    },
+    "dtypes": {
+      "float32": 400
+    },
+    "min": -0.2248806655406952,
+    "max": 2.1580159664154053,
+    "mean_of_means": 0.4427420272305608,
+    "mean_of_stds": 0.2202688201982528,
+    "bad_files": []
+  },
+  "pairing_mode": "same_stem"
+}
