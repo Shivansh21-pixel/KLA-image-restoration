@@ -1,800 +1,173 @@
-<div align="center">
+# Semiconductor Image Restoration
 
-# KLA — AI-Based Semiconductor Image Restoration
+A PyTorch project that restores **128×128 noisy, low-resolution grayscale semiconductor images** into **256×256 clean outputs** using a lightweight NAFNet-inspired network I built from scratch.
 
-### SEMICON India Hackathon 2026 · Team WAYAN-X
+I wanted to see how far a small, carefully designed model could go on a problem where interpolation alone fails: the input is degraded by noise *and* low resolution at the same time, and the structures that matter (edges, fine patterns, tiny defects) are exactly what naive upscaling smears out.
 
-**128×128 NoisyLR → 256×256 Structurally Faithful Reconstruction**
-
-A lightweight deep-learning restoration pipeline designed for degraded semiconductor inspection imagery.
-
-</div>
-
----
-
-## 🤺 Overview
-
-Semiconductor inspection systems operate under strict constraints on resolution, acquisition time, noise, and throughput. Low-resolution inspection scans can contain noise while simultaneously losing the fine structural information required to distinguish narrow circuit features and potential defects.
-
-**WAYAN-X** addresses this problem as a learned image-restoration task:
-
-```text
-                 DEGRADED INPUT
-                    128 × 128
-                       │
-                       ▼
-              ┌─────────────────┐
-              │  NAFNet-Lite    │
-              │  Restoration    │
-              │    Network      │
-              └─────────────────┘
-                       │
-                       ▼
-               256 × 256 OUTPUT
-                       │
-                       ▼
-          Restored Semiconductor Image
-```
-
-Instead of relying on fixed interpolation such as bicubic or Lanczos, the proposed system learns the transformation from paired degraded and clean semiconductor images.
-
-The final pipeline combines:
-
-- A lightweight CNN baseline for establishing a reference point
-- **NAFNet-inspired lightweight encoder–decoder architecture**
-- Residual learning
-- SimpleGate-based feature transformation
-- Depthwise convolutions for efficient spatial processing
-- PixelShuffle-based upsampling
-- Skip connections for structural preservation
-- L1 reconstruction loss
-- AdamW optimization
-- Cosine learning-rate scheduling
-- Flip-based Test-Time Augmentation (TTA)
-- Offline normal + TTA prediction ensemble
+![PyTorch](https://img.shields.io/badge/PyTorch-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)
+![Task](https://img.shields.io/badge/Task-Image%20Restoration%20%2B%202x%20SR-2563eb?style=flat-square)
+![Val PSNR](https://img.shields.io/badge/Val%20PSNR-28.79%20dB-16a34a?style=flat-square)
+![Val SSIM](https://img.shields.io/badge/Val%20SSIM-0.7709-16a34a?style=flat-square)
 
 ---
 
-# 🏆 Key Results
+## What it does
 
-The best NAFNet-Lite checkpoint achieved the following results on the held-out validation split:
+| | |
+|---|---|
+| **Input** | 128×128 grayscale, noisy + low-res (Gaussian / speckle-like noise, downsampled) |
+| **Output** | 256×256 grayscale, denoised + 2× upscaled |
+| **Model** | NAFNet-Lite — multi-scale encoder-decoder, ~single forward pass |
+| **Training** | AdamW, L1 loss, 50 epochs, validation on PSNR / SSIM / L1 |
+| **Inference** | Batch inference over 400 unseen images, with optional TTA + ensembling |
 
-| Metric | Result |
+Denoising and resolution recovery are learned **jointly in one network** instead of chaining a denoiser and a separate super-resolution model, so errors from one stage don't get amplified by the next.
+
+---
+
+## Results
+
+Best checkpoint, evaluated on the held-out **validation split**:
+
+| Metric | Value |
 |---|---:|
-| **Validation PSNR** | **28.7921 dB** |
-| **Validation SSIM** | **0.7709** |
-| Validation L1 | 0.028807 |
-| Input Resolution | 128 × 128 |
-| Output Resolution | 256 × 256 |
-| Training Pairs | 3,200 |
-| Held-out Test Images | 400 |
-| Model Parameters | 2,679,457 |
-| Training Epochs | 50 |
+| PSNR | **28.7921 dB** |
+| SSIM | **0.7709** |
+| L1 | 0.028807 |
 
-> **Important:** PSNR/SSIM values above are validation metrics. Ground truth for the 400 held-out test images was not available locally, so no test-set PSNR/SSIM is claimed.
+Baseline comparison (same validation protocol):
 
----
+| Model | PSNR | SSIM |
+|---|---:|---:|
+| Tiny CNN baseline | ~27.89 dB | ~0.74 |
+| **NAFNet-Lite** | **28.7921 dB** | **0.7709** |
 
-# 🧠 Why NAFNet-Lite?
+That is roughly **+0.9 dB PSNR and +0.03 SSIM** over the baseline.
 
-A conventional interpolation pipeline only estimates missing pixels using a fixed mathematical kernel.
-
-```text
-128×128
-  │
-  ▼
-Bicubic / Lanczos
-  │
-  ▼
-256×256
-```
-
-This does not learn the characteristics of semiconductor structures or the noise distribution present in the training data.
-
-Our approach instead learns:
-
-```text
-NoisyLR + Learned Structural Representation
-                    │
-                    ▼
-             Restoration Model
-                    │
-                    ▼
-             Clean Reconstruction
-```
-
-The network is trained directly on paired **NoisyLR / Ground Truth** samples, allowing it to learn both noise suppression and structural reconstruction.
+> **A note on what these numbers are.** They are validation metrics. The 400 test inputs were restored and saved, but I did not have their ground truth locally, so I don't report test-set PSNR/SSIM and I don't claim TTA or the ensemble improved a metric — only that they were compared as inference-stability experiments (see below).
 
 ---
 
-# 🏗️ Architecture
+## Pipeline
 
-The main model is implemented in:
-
-```text
-models/nafnet_lite.py
+```mermaid
+flowchart LR
+    A["Paired data<br/>NoisyLR 128² + GT 256²"] --> B["Tiny CNN<br/>baseline"]
+    B --> C["NAFNet-Lite<br/>training"]
+    C --> D["Best checkpoint<br/>(by val PSNR)"]
+    D --> E["Normal inference"]
+    D --> F["TTA inference"]
+    E --> G["0.5 / 0.5 ensemble"]
+    F --> G
+    G --> H["400 restored<br/>256×256 outputs"]
 ```
 
-and configured through:
+## Model
 
-```text
-configs/model.yaml
+The network is my own lightweight implementation in the spirit of NAFNet (Chen et al., *Simple Baselines for Image Restoration*). It is **not** a port of the official code and I don't claim its benchmark numbers.
+
+```mermaid
+flowchart TD
+    IN["Input 1×128×128"] --> INTRO["Intro conv"]
+    INTRO --> E1["Encoder stage 1 (2 blocks)"]
+    E1 --> E2["Encoder stage 2 (2 blocks)"]
+    E2 --> E3["Encoder stage 3 (4 blocks)"]
+    E3 --> MID["Middle (4 blocks)"]
+    MID --> D1["Decoder stage (2 blocks)"]
+    D1 --> D2["Decoder stage (2 blocks)"]
+    D2 --> D3["Decoder stage (2 blocks)"]
+    D3 --> UP["PixelShuffle ×2"]
+    UP --> OUT["Output 1×256×256"]
+    E1 -. skip .-> D3
+    E2 -. skip .-> D2
+    E3 -. skip .-> D1
 ```
 
-The model is **NAFNet-inspired**, rather than a direct reproduction of the original NAFNet paper.
+**Config:** width 32 · encoder blocks `[2, 2, 4]` · middle blocks 4 · decoder blocks `[2, 2, 2]` · 1 input channel · 1 output channel · scale ×2
 
-### Configuration
+**Design choices**
 
-```text
-width          = 32
-enc_blocks     = (2, 2, 4)
-middle_blocks  = 4
-dec_blocks     = (2, 2, 2)
-scale          = 2
-```
+- **SimpleGate** instead of a conventional activation — cheap, and keeps the block simple.
+- **Depthwise convolutions + GroupNorm** — low parameter count, and GroupNorm behaves better than BatchNorm at small batch sizes.
+- **Skip connections** — carry high-frequency detail (edges, fine structure) past the bottleneck.
+- **Residual learning** — the network predicts a correction on top of the input rather than the whole image.
+- **PixelShuffle upsampling** — sub-pixel convolution for the 2× step, which avoids the checkerboard artifacts transposed convolutions can introduce.
 
-### High-Level Architecture
+## Inference experiments
 
-```text
-                         INPUT
-                      128 × 128 × 1
-                            │
-                            ▼
-                       Intro Conv
-                            │
-                            ▼
-                  ┌─────────────────┐
-                  │    Encoder 1    │
-                  │  2 × NAFBlock   │
-                  │     32 ch       │
-                  └────────┬────────┘
-                           │
-                       Downsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │    Encoder 2    │
-                  │  2 × NAFBlock   │
-                  │     64 ch       │
-                  └────────┬────────┘
-                           │
-                       Downsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │    Encoder 3    │
-                  │  4 × NAFBlock   │
-                  │    128 ch       │
-                  └────────┬────────┘
-                           │
-                       Downsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │     Middle      │
-                  │  4 × NAFBlock   │
-                  │    256 ch       │
-                  └────────┬────────┘
-                           │
-                       Upsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │    Decoder 1    │
-                  │  2 × NAFBlock   │
-                  │    128 ch       │
-                  └────────┬────────┘
-                           │
-                       Upsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │    Decoder 2    │
-                  │  2 × NAFBlock   │
-                  │     64 ch       │
-                  └────────┬────────┘
-                           │
-                       Upsample
-                           │
-                           ▼
-                  ┌─────────────────┐
-                  │    Decoder 3    │
-                  │  2 × NAFBlock   │
-                  │     32 ch       │
-                  └────────┬────────┘
-                           │
-                           ▼
-                      Ending Conv
-                           │
-                           ▼
-                     256 × 256 × 1
-```
+I ran the best checkpoint over all 400 test inputs in three ways and compared the outputs:
 
-The decoder performs progressive 2× PixelShuffle-based upsampling, resulting in the required **2× spatial resolution increase** from 128×128 to 256×256.
-
----
-
-# 🔬 NAFBlock-Lite
-
-Each restoration block uses two residual branches.
-
-```text
-                 Input
-                   │
-          ┌────────┴────────┐
-          │                 │
-          ▼                 ▼
-      Norm + PW1        Norm + PW1
-          │                 │
-          ▼                 ▼
-      SimpleGate        SimpleGate
-          │                 │
-          ▼                 ▼
-   Depthwise Conv         PW Conv
-          │                 │
-          ▼                 ▼
-        PW2 Conv          Output
-          │
-          ▼
-      β residual
-          │
-          └──────┐
-                 ▼
-               Merge
-                 │
-                 ▼
-             γ residual
-                 │
-                 ▼
-               Output
-```
-
-### Main Components
-
-| Component | Role |
-|---|---|
-| **SimpleGate** | Lightweight feature gating without an activation function |
-| **Depthwise Conv** | Efficient spatial feature extraction |
-| **Pointwise Conv** | Channel-wise feature transformation |
-| **GroupNorm** | Stable normalization with small batch sizes |
-| **Residual Scaling (β, γ)** | Controls contribution of learned residual branches |
-| **Skip Connections** | Preserve structural information across the encoder-decoder |
-| **PixelShuffle** | Efficient spatial upsampling |
-
-The combination keeps the model substantially lighter than a large restoration network while retaining enough capacity to learn complex image structures.
-
----
-
-# ⚙️ Training Strategy
-
-Training configuration is defined in:
-
-```text
-configs/train.yaml
-```
-
-and the training loop is implemented in:
-
-```text
-train.py
-```
-
-| Configuration | Value |
-|---|---|
-| Loss | `L1Loss` |
-| Optimizer | AdamW |
-| Learning Rate | `0.0002` |
-| Weight Decay | `1e-4` |
-| LR Scheduler | CosineAnnealingLR |
-| Batch Size | 2 |
-| Epochs | 50 |
-| Patch Size | 128 |
-| Train / Validation Split | 90% / 10% |
-| Random Seed | 42 |
-| Mixed Precision | CUDA AMP |
-| Horizontal Flip | ✓ |
-| Vertical Flip | ✓ |
-| 90° Rotations | ✓ |
-
-### Why L1?
-
-L1 loss was selected as the reconstruction objective because it directly penalizes pixel-level deviation while being less sensitive to large individual errors than squared-error objectives.
-
-```text
-Prediction ─────┐
-                ├── L1 Loss ──► Optimization
-Ground Truth ───┘
-```
-
----
-
-# 📊 Validation Metrics
-
-The model is evaluated after every epoch.
-
-### PSNR
-
-Peak Signal-to-Noise Ratio measures pixel-level reconstruction fidelity.
-
-**Higher is better.**
-
-### SSIM
-
-Structural Similarity Index evaluates similarity in luminance, contrast, and structural information.
-
-This is particularly relevant for semiconductor inspection because preserving edges and structural patterns is important beyond raw pixel similarity.
-
-### Best Checkpoint
-
-The best model is selected using:
-
-```text
-Highest Validation PSNR
-```
-
-rather than simply using the final epoch.
-
-Final best validation result:
-
-```text
-PSNR : 28.7921 dB
-SSIM : 0.7709
-L1   : 0.028807
-```
-
----
-
-# 🆚 Baseline vs NAFNet-Lite
-
-A lightweight Tiny CNN baseline was also implemented to establish a reference point under the same general training setup.
-
-| Model | Parameters | Validation PSNR | Validation SSIM |
+| Prediction | Min | Max | Mean |
 |---|---:|---:|---:|
-| Tiny CNN Baseline | ~370K | ≈27.89 dB | ≈0.74 |
-| **NAFNet-Lite** | **2,679,457** | **28.7921 dB** | **0.7709** |
+| Normal | 0.0131 | 0.9526 | 0.6615 |
+| TTA | 0.0183 | 0.9510 | 0.6613 |
+| Ensemble (0.5·Normal + 0.5·TTA), example | 0.0158 | 0.9491 | 0.6614 |
 
-The NAFNet-Lite model provides an approximately **0.9 dB PSNR improvement** over the baseline reference.
-
-> Baseline values are approximate reference values from the same validation setup and are not presented as competition test-set scores.
+Mean absolute difference between normal and TTA predictions: **0.00333**. The two paths agree closely, which is the point of the experiment: the ensemble smooths out sensitivity to a single forward pass. Without test ground truth this is a stability check, not an accuracy claim.
 
 ---
 
-# 🔄 Test-Time Augmentation
+## Repository layout
 
-The final inference pipeline supports 4-way flip-based TTA through:
+```
+├── configs/          dataset.yaml · model.yaml · train.yaml
+├── datasets/         npy_dataset.py        # paired NoisyLR / GT loader
+├── models/           nafnet_lite.py · tiny_baseline.py
+├── losses/
+├── utils/            checkpoint.py · metrics.py · seed.py
+├── scripts/          inspect_dataset.py · benchmark_inference.py · metrics.py
+├── reports/          dataset_report.json
+├── train.py          # training + validation + best/latest checkpointing
+├── inference.py      # batch inference (+ TTA)
+├── evaluate.py
+└── requirements.txt
+```
+
+## Getting started
 
 ```bash
-python evaluate.py --tta
-```
+git clone https://github.com/Shivansh21-pixel/semiconductor-image-restoration.git
+cd semiconductor-image-restoration
 
-The model evaluates the input under four transformations:
-
-```text
-Original
-Horizontal Flip
-Vertical Flip
-Horizontal + Vertical Flip
-```
-
-Each prediction is transformed back to the original orientation and averaged.
-
-```text
-          ┌── Original ───────────┐
-Input ────┼── Horizontal Flip ────┤
-          ├── Vertical Flip ──────┤──► Average
-          └── Both Flips ─────────┘
-```
-
-This reduces sensitivity to image orientation and can provide a more stable prediction.
-
----
-
-# 🧩 Final Prediction Ensemble
-
-For the final prediction artifacts, we additionally generated an offline ensemble between:
-
-```text
-Normal Prediction
-        +
-4-way TTA Prediction
-```
-
-using:
-
-```text
-Final Prediction
-=
-0.5 × Normal
-+
-0.5 × TTA
-```
-
-The resulting 400 predictions are stored in:
-
-```text
-results/ensemble/
-```
-
-### Important
-
-The ensemble is an **offline post-processing step**. It is not currently exposed as an `--ensemble` argument in `evaluate.py`.
-
-Because ground truth for the 400 test images is unavailable locally, we do **not** claim that the ensemble improves test PSNR/SSIM.
-
----
-
-# 📦 Submission Artifacts
-
-The repository contains the main artifacts required to reproduce and inspect the solution.
-
-```text
-checkpoints_nafnet/
-└── best_model.pth
-```
-
-### Model checkpoint
-
-```text
-checkpoints_nafnet/best_model.pth
-```
-
-Best checkpoint selected using validation PSNR.
-
-### Final predictions
-
-```text
-results/ensemble/
-├── 000000.npy
-├── 000001.npy
-├── ...
-└── 000399.npy
-```
-
-Total:
-
-```text
-400 restored predictions
-```
-
-Each prediction is stored as a NumPy array with shape:
-
-```text
-256 × 256
-```
-
----
-
-# 🗂️ Dataset
-
-The pipeline operates on paired NumPy arrays.
-
-```text
-train/
-├── NoisyLR/
-│   ├── 000000.npy
-│   ├── 000001.npy
-│   └── ...
-│
-└── GT/
-    ├── 000000.npy
-    ├── 000001.npy
-    └── ...
-```
-
-### Dataset Characteristics
-
-| Split | Input | Target | Samples |
-|---|---|---|---:|
-| Training | 128×128 | 256×256 | 3,200 |
-| Validation | 128×128 | 256×256 | 320 |
-| Test | 128×128 | — | 400 |
-
-The test set does not include locally available ground truth.
-
-The dataset itself is **not bundled with this repository**.
-
----
-
-# 🔁 Reproducibility
-
-## 1. Clone
-
-```bash
-git clone git@github.com:Shivansh21-pixel/KLA-image-restoration.git
-cd KLA-image-restoration
-```
-
-## 2. Create Environment
-
-Windows PowerShell:
-
-```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-```
-
-## 3. Install Dependencies
-
-```bash
+# Windows: .\.venv\Scripts\Activate.ps1   |   Linux/macOS: source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-## 4. Configure Dataset
-
-Update:
-
-```text
-configs/dataset.yaml
-```
-
-with the local training and test dataset paths.
-
----
-
-# 🏋️ Training
-
-Run:
+Set your local data paths in `configs/dataset.yaml`, then:
 
 ```bash
-python train.py
+python train.py            # train
+python train.py --resume   # resume from the latest checkpoint
+
+python inference.py \
+  --input_dir "PATH_TO_NOISYLR" \
+  --output_dir "results/final_nafnet" \
+  --checkpoint "checkpoints_nafnet/best_model.pth"
 ```
 
-To resume an interrupted training run:
+Checkpoints are saved to `checkpoints_nafnet/` as `best_model.pth` (highest validation PSNR) and `latest_model.pth`.
 
-```bash
-python train.py --resume
+**Data format** — paired `.npy` arrays matched by filename:
+
+```
+train/
+├── NoisyLR/  000000.npy, 000001.npy, ...   # 128×128
+└── GT/       000000.npy, 000001.npy, ...   # 256×256
 ```
 
-Checkpoints are written to:
-
-```text
-checkpoints_nafnet/
-├── best_model.pth
-└── latest_model.pth
-```
+The dataset is not included in this repo.
 
 ---
 
-# 🔎 Inference
+## Limitations and what I'd do next
 
-Run standard inference:
+- Validation-only evaluation; no test-set score, since ground truth wasn't available to me.
+- L1 alone tends to favor smooth outputs. A structural or perceptual loss term is the first thing I'd add to sharpen edges.
+- Augmentation is minimal, and the model is small on purpose — I'd scale width/depth once training time isn't the constraint.
+- Side-by-side visual panels (input / restored / ground truth) and more systematic experiment tracking.
+- Profiling inference speed and memory.
 
-```bash
-python evaluate.py ^
-  --input_dir PATH_TO_TEST_NOISYLR ^
-  --output_dir results/normal ^
-  --checkpoint checkpoints_nafnet/best_model.pth
-```
+## References
 
-For 4-way TTA:
-
-```bash
-python evaluate.py ^
-  --input_dir PATH_TO_TEST_NOISYLR ^
-  --output_dir results/tta ^
-  --checkpoint checkpoints_nafnet/best_model.pth ^
-  --tta
-```
-
-### Windows PowerShell
-
-If using PowerShell, the commands can also be written on one line:
-
-```powershell
-python evaluate.py --input_dir "PATH_TO_TEST_NOISYLR" --output_dir "results/normal" --checkpoint "checkpoints_nafnet/best_model.pth"
-```
-
-TTA:
-
-```powershell
-python evaluate.py --input_dir "PATH_TO_TEST_NOISYLR" --output_dir "results/tta" --checkpoint "checkpoints_nafnet/best_model.pth" --tta
-```
-
----
-
-# 📁 Repository Structure
-
-```text
-KLA-image-restoration/
-│
-├── configs/
-│   ├── dataset.yaml
-│   ├── model.yaml
-│   └── train.yaml
-│
-├── datasets/
-│   ├── __init__.py
-│   └── npy_dataset.py
-│
-├── models/
-│   ├── __init__.py
-│   ├── nafnet_lite.py
-│   └── tiny_baseline.py
-│
-├── losses/
-│
-├── utils/
-│   ├── __init__.py
-│   ├── metrics.py
-│   ├── checkpoint.py
-│   └── seed.py
-│
-├── scripts/
-│   ├── inspect_dataset.py
-│   ├── benchmark_inference.py
-│   └── metrics.py
-│
-├── reports/
-│   └── dataset_report.json
-│
-├── docs/
-│   └── ppt_content.md
-│
-├── checkpoints_nafnet/
-│   └── best_model.pth
-│
-├── results/
-│   └── ensemble/
-│       ├── 000000.npy
-│       ├── ...
-│       └── 000399.npy
-│
-├── train.py
-├── evaluate.py
-├── inference.py
-├── requirements.txt
-├── .gitignore
-└── README.md
-```
-
----
-
-# 💡 Engineering Highlights
-
-### Reproducibility
-
-- Fixed random seed for dataset splitting
-- YAML-based configuration
-- Deterministic training setup where applicable
-- Checkpoint resume support
-
-### Training
-
-- AdamW optimizer
-- Cosine learning-rate scheduling
-- AMP on CUDA
-- Best-checkpoint selection using validation PSNR
-- Per-epoch PSNR, SSIM and L1 evaluation
-
-### Model
-
-- Lightweight encoder-decoder architecture
-- SimpleGate feature transformation
-- Depthwise convolution
-- GroupNorm
-- Residual learning
-- Skip connections
-- PixelShuffle upsampling
-
-### Inference
-
-- Standalone evaluation pipeline
-- CPU/CUDA support
-- 4-way flip TTA
-- Offline normal + TTA ensemble
-- NumPy `.npy` input/output
-
----
-
-# ⚡ Design Philosophy
-
-The solution was designed around three constraints:
-
-```text
-          STRUCTURAL FIDELITY
-                  ▲
-                  │
-                  │
-    COMPUTE ◄─────┼─────► ROBUSTNESS
-                  │
-                  ▼
-             FAST ITERATION
-```
-
-Rather than maximizing model size, the objective was to find a practical balance between:
-
-**Restoration Quality × Model Complexity × Training Efficiency**
-
-The resulting NAFNet-Lite model contains approximately **2.68M parameters** while achieving **28.7921 dB validation PSNR**.
-
----
-
-# 🔬 Limitations & Future Improvements
-
-The current implementation leaves several directions open for further improvement.
-
-### 1. Structural / Perceptual Loss
-
-The current training objective is L1-only.
-
-Potential future direction:
-
-```text
-L_total =
-λ1 × L1
-+
-λ2 × Structural Loss
-+
-λ3 × Perceptual Loss
-```
-
-### 2. Larger Model Capacity
-
-The width and block depth could be increased if additional compute and training time are available.
-
-### 3. Advanced TTA
-
-The current TTA uses four flip transformations.
-
-Future experiments could investigate:
-
-- Multi-scale TTA
-- Rotation-aware TTA
-- Learned prediction fusion
-
-### 4. Test-Time Validation
-
-Actual test-set PSNR/SSIM can only be calculated when corresponding ground truth is available.
-
----
-
-# 🎯 Final Takeaway
-
-**WAYAN-X transforms degraded 128×128 semiconductor inspection imagery into 256×256 restorations using a compact, learned image-restoration pipeline.**
-
-The system combines:
-
-```text
-Paired Training Data
-        │
-        ▼
-NAFNet-Inspired Architecture
-        │
-        ├── SimpleGate
-        ├── Depthwise Convolution
-        ├── Residual Learning
-        ├── Skip Connections
-        └── PixelShuffle
-        │
-        ▼
-Validation-Driven Checkpoint Selection
-        │
-        ▼
-4-Way Test-Time Augmentation
-        │
-        ▼
-Normal + TTA Ensemble
-        │
-        ▼
-400 Final 256×256 Predictions
-```
-
-### Best validated performance
-
-**28.7921 dB PSNR · 0.7709 SSIM**
-
-on the held-out validation split.
-
----
-
-<div align="center">
-
-# WAYAN-X
-
-### KLA — AI-Based Semiconductor Image Restoration
-
-**SEMICON India Hackathon 2026**
-
-*Restoring the structure that matters.*
-
-</div>
+- L. Chen, X. Chu, X. Zhang, J. Sun. *Simple Baselines for Image Restoration* (NAFNet), ECCV 2022.
